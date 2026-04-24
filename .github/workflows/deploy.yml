@@ -67,7 +67,7 @@ jobs:
         id: get-task-def
         run: |
           aws ecs describe-task-definition \
-            --task-definition ${{ env.ECS_SERVICE }}-app \
+            --task-definition ${{ env.ECR_REPOSITORY }} \
             --query 'taskDefinition' \
             --output json > task-def.json
           # Remove fields that cannot be included in register-task-definition
@@ -116,7 +116,7 @@ jobs:
 
       - name: Upsert SageMaker Pipeline
         env:
-          S3_BUCKET: ${{ secrets.AWS_ACCOUNT_ID }}-tabular-ml-platform-data
+          S3_BUCKET: tabular-ml-platform-data-${{ secrets.AWS_ACCOUNT_ID }}
           SAGEMAKER_ROLE_ARN: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/tabular-ml-platform-sagemaker-role
           MODEL_PACKAGE_GROUP: tabular-ml-platform-models
           PIPELINE_NAME: ${{ env.PIPELINE_NAME }}
