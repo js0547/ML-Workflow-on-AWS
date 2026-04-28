@@ -1,14 +1,9 @@
-# Dependencies for the SageMaker training container.
-# These are installed inside the SKLearn 1.2-1 framework container
-# at training time via the source_dir mechanism.
-# IMPORTANT: The SKLearn 1.2-1 container uses Python 3.9.
-# All packages MUST support Python 3.9.
+# Dependencies for the SageMaker SKLearn 1.2-1 training container.
+# ONLY list packages NOT already in the container.
+# The container already has: scikit-learn, pandas, numpy, scipy, joblib
+# Do NOT try to upgrade them -- it causes conflicts and crashes.
 
-scikit-learn>=1.3.0,<1.6.0
 xgboost>=2.0.0,<2.2.0
 lightgbm>=4.1.0,<4.5.0
-pandas>=2.1.0,<3.0.0
-numpy>=1.24.0,<2.1.0
-matplotlib>=3.8.0,<3.10.0
-seaborn>=0.13.0,<0.14.0
-joblib>=1.3.0,<1.5.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
