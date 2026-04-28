@@ -28,6 +28,7 @@ import sagemaker
 from sagemaker.estimator import Estimator
 from sagemaker.inputs import TrainingInput
 from sagemaker.model_metrics import MetricsSource, ModelMetrics
+from sagemaker.workflow.functions import Join
 from sagemaker.workflow.parameters import ParameterString
 from sagemaker.workflow.pipeline import Pipeline
 from sagemaker.workflow.step_collections import RegisterModel
@@ -175,8 +176,12 @@ def get_pipeline_definition(
     # s3://<bucket>/pipeline-output/<job-name>/output/output.tar.gz
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
-            s3_uri="{}/evaluation.json".format(
-                training_step.properties.OutputDataConfig.S3OutputPath
+            s3_uri=Join(
+                on="/",
+                values=[
+                    training_step.properties.OutputDataConfig.S3OutputPath,
+                    "evaluation.json",
+                ],
             ),
             content_type="application/json",
         )
