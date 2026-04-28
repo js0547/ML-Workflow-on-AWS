@@ -74,6 +74,7 @@ resource "aws_iam_role_policy" "sagemaker_core" {
           "sagemaker:CreateModel",
           "sagemaker:DescribeModel",
           "sagemaker:CreateModelPackage",
+          "sagemaker:CreateModelPackageGroup",
           "sagemaker:DescribeModelPackage",
           "sagemaker:DescribeModelPackageGroup",
           "sagemaker:UpdateModelPackage",
@@ -254,7 +255,10 @@ resource "aws_iam_role_policy" "ecs_task_sagemaker" {
           "sagemaker:DescribePipelineExecution",
           "sagemaker:ListPipelineExecutionSteps",
           "sagemaker:DescribePipeline",
-          "sagemaker:ListPipelineExecutions"
+          "sagemaker:ListPipelineExecutions",
+          "sagemaker:DescribeTrainingJob",
+          "sagemaker:DescribeModelPackage",
+          "sagemaker:ListModelPackages"
         ]
         Resource = "*"
       }

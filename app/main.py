@@ -332,31 +332,15 @@ def get_artifacts(execution_arn: str):
         )
 
         output_path = training_response.get("OutputDataConfig", {}).get("S3OutputPath", "")
-        # The output artifacts are in: <output_path>/<job_name>/output/output.tar.gz
-        # But EDA plots are in: <output_path>/<job_name>/output/
+        # SageMaker packages output data into output.tar.gz at:
+        #   <output_path>/<job_name>/output/output.tar.gz
         output_prefix = "{}/{}/output/".format(
             output_path.replace("s3://{}/".format(S3_BUCKET), ""),
             training_job_name,
         )
 
-        # Generate pre-signed URLs for EDA plots
-        artifacts = {}
-
-        # Try to get correlation heatmap
-        heatmap_key = "{}correlation_heatmap.png".format(output_prefix)
-        artifacts["correlation_heatmap_url"] = _get_presigned_url(heatmap_key)
-
-        # Try to get missing value matrix
-        missing_key = "{}missing_value_matrix.png".format(output_prefix)
-        artifacts["missing_value_matrix_url"] = _get_presigned_url(missing_key)
-
-        # Try to get data summary
-        summary_key = "{}data_summary.json".format(output_prefix)
-        artifacts["data_summary"] = _get_json_from_s3(summary_key)
-
-        # Try to get evaluation metrics
-        eval_key = "{}evaluation.json".format(output_prefix)
-        artifacts["evaluation_metrics"] = _get_json_from_s3(eval_key)
+        # Extract artifacts from output.tar.gz
+        artifacts = _extract_artifacts_from_tar(output_prefix)
 
         # Add model package ARN if available
         artifacts["model_package_arn"] = model_package_arn or ""
@@ -402,6 +386,58 @@ def list_executions():
 # ------------------------------------------------------------------
 # Helper Functions
 # ------------------------------------------------------------------
+
+def _extract_artifacts_from_tar(output_prefix):
+    """
+    Download output.tar.gz from S3, extract it in memory, and parse artifacts.
+    SageMaker packages all files written to /opt/ml/output/data/ into this tar.
+    """
+    import tarfile
+    import base64
+
+    artifacts = {
+        "correlation_heatmap_url": "",
+        "missing_value_matrix_url": "",
+        "data_summary": {},
+        "evaluation_metrics": {},
+    }
+
+    tar_key = "{}output.tar.gz".format(output_prefix)
+    logger.info("Downloading output.tar.gz from s3://%s/%s", S3_BUCKET, tar_key)
+
+    try:
+        response = s3_client.get_object(Bucket=S3_BUCKET, Key=tar_key)
+        tar_bytes = response["Body"].read()
+
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+            for member in tar.getmembers():
+                logger.info("Found in output.tar.gz: %s", member.name)
+                f = tar.extractfile(member)
+                if f is None:
+                    continue
+                content = f.read()
+
+                basename = member.name.split("/")[-1]
+
+                if basename == "evaluation.json":
+                    artifacts["evaluation_metrics"] = json.loads(content.decode("utf-8"))
+                elif basename == "data_summary.json":
+                    artifacts["data_summary"] = json.loads(content.decode("utf-8"))
+                elif basename == "correlation_heatmap.png":
+                    # Encode image as base64 data URL for the frontend
+                    b64 = base64.b64encode(content).decode("utf-8")
+                    artifacts["correlation_heatmap_url"] = "data:image/png;base64,{}".format(b64)
+                elif basename == "missing_value_matrix.png":
+                    b64 = base64.b64encode(content).decode("utf-8")
+                    artifacts["missing_value_matrix_url"] = "data:image/png;base64,{}".format(b64)
+
+    except ClientError as e:
+        logger.warning("Could not download output.tar.gz: %s", e)
+    except Exception as e:
+        logger.warning("Error extracting output.tar.gz: %s", e)
+
+    return artifacts
+
 
 def _get_presigned_url(s3_key, expiration=3600):
     """Generate a pre-signed URL for an S3 object. Returns empty string on failure."""
