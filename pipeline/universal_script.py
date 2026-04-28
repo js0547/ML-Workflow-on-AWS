@@ -24,11 +24,8 @@ import sys
 import warnings
 
 import joblib
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
@@ -41,8 +38,17 @@ from sklearn.metrics import (
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 
-# Use non-interactive backend for matplotlib (no display needed on SageMaker)
-matplotlib.use("Agg")
+# Try to import plotting libraries -- they may not be available or compatible
+# in all SageMaker container environments. Training will still work without them.
+HAS_PLOTTING = False
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    HAS_PLOTTING = True
+except (ImportError, RuntimeError) as e:
+    logging.warning("Plotting libraries unavailable: %s. EDA plots will be skipped.", e)
 
 # Suppress warnings that clutter SageMaker logs
 warnings.filterwarnings("ignore")
@@ -150,6 +156,14 @@ def load_data(train_dir):
 def generate_eda_plots(df, output_dir):
     """Generate and save EDA plots: correlation heatmap and missing value matrix."""
     os.makedirs(output_dir, exist_ok=True)
+
+    # Always generate the JSON data summary (no plotting library needed)
+    generate_data_summary(df, output_dir)
+
+    if not HAS_PLOTTING:
+        logger.warning("Skipping EDA plots (matplotlib/seaborn not available).")
+        return
+
     logger.info("Generating EDA plots...")
 
     # -- Correlation Heatmap --
@@ -157,9 +171,6 @@ def generate_eda_plots(df, output_dir):
 
     # -- Missing Value Matrix --
     generate_missing_value_matrix(df, output_dir)
-
-    # -- Data Summary --
-    generate_data_summary(df, output_dir)
 
     logger.info("EDA plots saved to %s", output_dir)
 
