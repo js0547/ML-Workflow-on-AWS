@@ -187,6 +187,10 @@ def trigger_pipeline(request: TriggerRequest):
         logger.info("  Dropped Columns: %s", request.dropped_columns)
         logger.info("  Input Data: %s", request.s3_uri)
 
+        # SageMaker requires parameter values to have minimum length 1.
+        # Use "none" as a sentinel when the user drops no columns.
+        dropped = request.dropped_columns if request.dropped_columns else "none"
+
         # Start the pipeline execution with user parameters
         response = sagemaker_client.start_pipeline_execution(
             PipelineName=PIPELINE_NAME,
@@ -194,7 +198,7 @@ def trigger_pipeline(request: TriggerRequest):
                 {"Name": "ModelType", "Value": request.model_type},
                 {"Name": "TaskType", "Value": request.task_type},
                 {"Name": "TargetColumn", "Value": request.target_column},
-                {"Name": "DroppedColumns", "Value": request.dropped_columns},
+                {"Name": "DroppedColumns", "Value": dropped},
                 {"Name": "InputData", "Value": request.s3_uri},
             ],
             PipelineExecutionDescription="Model: {} | Target: {} | Task: {}".format(
