@@ -112,7 +112,7 @@ jobs:
       # ----- Upsert SageMaker Pipeline -----
       - name: Install Python dependencies for pipeline upsert
         run: |
-          pip install --quiet boto3 sagemaker
+          pip install --quiet boto3 "sagemaker>=2.0,<3.0"
 
       - name: Upsert SageMaker Pipeline
         env:
