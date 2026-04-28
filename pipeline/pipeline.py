@@ -99,7 +99,7 @@ def get_pipeline_definition(
 
     param_dropped_columns = ParameterString(
         name="DroppedColumns",
-        default_value="",
+        default_value="none",
     )
 
     param_input_data = ParameterString(
