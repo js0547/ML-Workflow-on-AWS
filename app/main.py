@@ -81,6 +81,15 @@ class TriggerRequest(BaseModel):
     task_type: str
 
 
+# Valid model/task combinations. Used for server-side validation.
+_VALID_MODEL_TASKS = {
+    "logistic_regression": ["classification"],
+    "linear_regression": ["regression"],
+    "xgboost": ["classification", "regression"],
+    "lightgbm": ["classification", "regression"],
+}
+
+
 class TriggerResponse(BaseModel):
     """Response body after triggering a pipeline execution."""
     execution_arn: str
@@ -178,6 +187,22 @@ def trigger_pipeline(request: TriggerRequest):
     Trigger a SageMaker Pipeline execution with the user's selections.
     All modeling decisions come from the user -- no auto-ML logic.
     """
+    # Server-side validation: reject invalid model/task combinations
+    if request.model_type not in _VALID_MODEL_TASKS:
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported model type: '{}'. Must be one of: {}".format(
+                request.model_type, list(_VALID_MODEL_TASKS.keys())
+            ),
+        )
+    if request.task_type not in _VALID_MODEL_TASKS[request.model_type]:
+        raise HTTPException(
+            status_code=400,
+            detail="Model '{}' does not support task '{}'. Supported tasks: {}".format(
+                request.model_type, request.task_type, _VALID_MODEL_TASKS[request.model_type]
+            ),
+        )
+
     try:
         # Log the user's choices
         logger.info("Pipeline execution started")
@@ -314,11 +339,16 @@ def get_artifacts(execution_arn: str):
                 if training_job_arn:
                     training_job_name = training_job_arn.split("/")[-1]
 
-            # Find model registration step
-            if step.get("StepName") == "RegisterTrainedModel":
+            # Find model registration step.
+            # RegisterModel is a StepCollection that produces sub-steps
+            # with names like "RegisterTrainedModel-RegisterModel",
+            # so we use startswith instead of exact match.
+            step_name = step.get("StepName", "")
+            if step_name.startswith("RegisterTrainedModel"):
                 metadata = step.get("Metadata", {})
                 register_meta = metadata.get("RegisterModel", {})
-                model_package_arn = register_meta.get("Arn", "")
+                if register_meta:
+                    model_package_arn = register_meta.get("Arn", "")
 
         if not training_job_name:
             raise HTTPException(
@@ -437,28 +467,3 @@ def _extract_artifacts_from_tar(output_prefix):
         logger.warning("Error extracting output.tar.gz: %s", e)
 
     return artifacts
-
-
-def _get_presigned_url(s3_key, expiration=3600):
-    """Generate a pre-signed URL for an S3 object. Returns empty string on failure."""
-    try:
-        url = s3_client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": S3_BUCKET, "Key": s3_key},
-            ExpiresIn=expiration,
-        )
-        # Verify the object exists
-        s3_client.head_object(Bucket=S3_BUCKET, Key=s3_key)
-        return url
-    except ClientError:
-        return ""
-
-
-def _get_json_from_s3(s3_key):
-    """Download and parse a JSON file from S3. Returns empty dict on failure."""
-    try:
-        response = s3_client.get_object(Bucket=S3_BUCKET, Key=s3_key)
-        content = response["Body"].read().decode("utf-8")
-        return json.loads(content)
-    except (ClientError, json.JSONDecodeError):
-        return {}

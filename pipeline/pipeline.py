@@ -171,16 +171,19 @@ def get_pipeline_definition(
     # Attaches evaluation metrics from the training output.
     # ==============================================================
 
-    # Point to the evaluation metrics JSON produced by universal_script.py
-    # The training job saves it to SM_OUTPUT_DATA_DIR which maps to
-    # s3://<bucket>/pipeline-output/<job-name>/output/output.tar.gz
+    # Point to the evaluation metrics JSON produced by universal_script.py.
+    # SageMaker packages all files from SM_OUTPUT_DATA_DIR into output.tar.gz
+    # at: s3://<output_path>/<job-name>/output/output.tar.gz
+    # For ModelMetrics, we point to the tar.gz since that is the actual S3 object.
     model_metrics = ModelMetrics(
         model_statistics=MetricsSource(
             s3_uri=Join(
                 on="/",
                 values=[
                     training_step.properties.OutputDataConfig.S3OutputPath,
-                    "evaluation.json",
+                    training_step.properties.TrainingJobName,
+                    "output",
+                    "output.tar.gz",
                 ],
             ),
             content_type="application/json",

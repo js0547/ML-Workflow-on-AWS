@@ -100,8 +100,8 @@ def parse_args():
     parser.add_argument(
         "--dropped_columns",
         type=str,
-        default="",
-        help="Comma-separated list of columns to drop. Empty string means drop none.",
+        default="none",
+        help="Comma-separated list of columns to drop. 'none' means drop none.",
     )
 
     # SageMaker environment paths
@@ -315,7 +315,8 @@ def preprocess_data(df, target_column, dropped_columns, task_type):
     logger.info("Starting preprocessing...")
 
     # Step 1: Drop user-specified columns
-    if dropped_columns:
+    # The backend sends "none" as a sentinel when the user drops no columns.
+    if dropped_columns and dropped_columns.strip().lower() != "none":
         cols_to_drop = [c.strip() for c in dropped_columns.split(",") if c.strip()]
         existing_cols = [c for c in cols_to_drop if c in df.columns]
         if existing_cols:
@@ -417,7 +418,6 @@ def initialize_model(model_type, task_type):
         if task_type == "classification":
             from xgboost import XGBClassifier
             model = XGBClassifier(
-                use_label_encoder=False,
                 eval_metric="logloss",
                 random_state=42,
                 n_estimators=100,

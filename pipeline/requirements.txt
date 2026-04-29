@@ -5,5 +5,6 @@
 #
 # XGBoost and LightGBM are only imported when the user selects those models.
 # For sklearn models (logistic_regression, linear_regression), nothing extra is needed.
-# If the user picks xgboost/lightgbm and it's not installed, the script will error
-# with a clear message rather than a cryptic numpy crash.
+
+xgboost>=1.7.0,<2.1.0
+lightgbm>=3.3.0,<4.5.0
