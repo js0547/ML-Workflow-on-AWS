@@ -25,10 +25,6 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-import sagemaker
-from sagemaker.estimator import Estimator as SageMakerEstimator
-from sagemaker.inputs import TrainingInput as SageMakerTrainingInput
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -571,6 +567,17 @@ def trigger_custom_job(
 
         logger.info("Custom job: script=%s, data=%s", script_filename, dataset_s3_uri)
 
+        # Lazy import sagemaker SDK (handles both v2 and v3 import paths)
+        import sagemaker
+        try:
+            from sagemaker.estimator import Estimator as _Estimator
+        except ImportError:
+            from sagemaker import Estimator as _Estimator
+        try:
+            from sagemaker.inputs import TrainingInput as _TrainingInput
+        except ImportError:
+            from sagemaker import TrainingInput as _TrainingInput
+
         image_uri = sagemaker.image_uris.retrieve(
             framework="sklearn",
             region=AWS_REGION,
@@ -583,7 +590,7 @@ def trigger_custom_job(
             boto_session=boto3.Session(region_name=AWS_REGION),
         )
 
-        estimator = SageMakerEstimator(
+        estimator = _Estimator(
             image_uri=image_uri,
             role=SAGEMAKER_ROLE_ARN,
             instance_count=1,
@@ -596,7 +603,7 @@ def trigger_custom_job(
             sagemaker_session=sm_session,
         )
 
-        training_input = SageMakerTrainingInput(
+        training_input = _TrainingInput(
             s3_data=dataset_s3_uri,
             content_type="text/csv",
         )
