@@ -190,6 +190,14 @@ if "pipeline_status" not in st.session_state:
 if "artifacts" not in st.session_state:
     st.session_state.artifacts = None
 
+# Custom script session state
+if "custom_upload" not in st.session_state:
+    st.session_state.custom_upload = None
+if "custom_job_name" not in st.session_state:
+    st.session_state.custom_job_name = None
+if "custom_artifacts" not in st.session_state:
+    st.session_state.custom_artifacts = None
+
 
 # ------------------------------------------------------------------
 # Helper Functions
@@ -279,6 +287,203 @@ st.markdown("""
     <p>Upload your data, choose your model, and execute -- every decision is yours.</p>
 </div>
 """, unsafe_allow_html=True)
+
+# Mode selector
+workflow_mode = st.radio(
+    "Workflow Mode",
+    ["Built-in Models", "Custom Script"],
+    horizontal=True,
+    help="Built-in Models: select from supported models. Custom Script: upload your own training script.",
+)
+
+# ==================================================================
+# CUSTOM SCRIPT MODE
+# ==================================================================
+
+if workflow_mode == "Custom Script":
+
+    # -- Info box with SageMaker conventions --
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<h3><span class="step-indicator">i</span> Script Requirements</h3>', unsafe_allow_html=True)
+    st.markdown(
+        "Your script will run inside a **SageMaker SKLearn 1.2 container** "
+        "(Python 3.9). Follow these conventions:\n"
+        "- Training data directory: use `argparse` arg `--train` or env var `SM_CHANNEL_TRAIN`\n"
+        "- Save your model to: `--model_dir` or env var `SM_MODEL_DIR` (`/opt/ml/model`)\n"
+        "- Save other outputs (metrics, plots) to: `--output_dir` or env var `SM_OUTPUT_DATA_DIR` (`/opt/ml/output/data`)\n"
+        "- Pre-installed packages: scikit-learn, pandas, numpy, scipy, joblib\n"
+        "- Add extra dependencies via an optional `requirements.txt` upload"
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # -- Step 1: Upload files --
+    st.markdown('<div class="section-card">', unsafe_allow_html=True)
+    st.markdown('<h3><span class="step-indicator">1</span> Upload Script & Data</h3>', unsafe_allow_html=True)
+
+    col_s, col_d = st.columns(2)
+    with col_s:
+        custom_script = st.file_uploader(
+            "Training Script (.py)",
+            type=["py"],
+            help="Your Python training script.",
+        )
+    with col_d:
+        custom_dataset = st.file_uploader(
+            "Dataset (.csv)",
+            type=["csv"],
+            key="custom_csv",
+            help="CSV dataset to train on.",
+        )
+
+    custom_requirements = st.file_uploader(
+        "requirements.txt (optional)",
+        type=["txt"],
+        help="Extra pip dependencies to install before training.",
+    )
+
+    if custom_script and custom_dataset:
+        upload_needed = (
+            st.session_state.custom_upload is None
+            or st.session_state.custom_upload.get("script_filename") != custom_script.name
+            or st.session_state.custom_upload.get("dataset_filename") != custom_dataset.name
+        )
+        if upload_needed:
+            with st.spinner("Uploading files to S3..."):
+                files = {
+                    "script": (custom_script.name, custom_script.getvalue(), "text/x-python"),
+                    "dataset": (custom_dataset.name, custom_dataset.getvalue(), "text/csv"),
+                }
+                if custom_requirements:
+                    files["requirements"] = (
+                        custom_requirements.name,
+                        custom_requirements.getvalue(),
+                        "text/plain",
+                    )
+                result = api_request("POST", "/api/custom/upload", files=files)
+                if result:
+                    st.session_state.custom_upload = result
+                    st.success(
+                        "Uploaded: {} + {} ({} rows, {} cols)".format(
+                            result["script_filename"],
+                            result["dataset_filename"],
+                            result["row_count"],
+                            result["column_count"],
+                        )
+                    )
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # -- Step 2: Trigger --
+    if st.session_state.custom_upload:
+        upload = st.session_state.custom_upload
+
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<h3><span class="step-indicator">2</span> Run Training Job</h3>', unsafe_allow_html=True)
+
+        st.info(
+            "Script **{}** will run on an ephemeral **ml.m5.large** instance. "
+            "The instance terminates automatically after training.".format(upload["script_filename"])
+        )
+
+        if st.button("Start Training Job", type="primary", use_container_width=True, key="custom_trigger"):
+            with st.spinner("Starting SageMaker training job..."):
+                trigger_data = {
+                    "script_s3_key": upload["script_s3_key"],
+                    "script_filename": upload["script_filename"],
+                    "dataset_s3_uri": upload["dataset_s3_uri"],
+                    "requirements_s3_key": upload.get("requirements_s3_key", ""),
+                }
+                trigger_result = api_request("POST", "/api/custom/trigger", data=trigger_data)
+                if trigger_result:
+                    st.session_state.custom_job_name = trigger_result["job_name"]
+                    st.session_state.custom_artifacts = None
+                    st.success(trigger_result["message"])
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # -- Step 3: Status & Artifacts --
+    if st.session_state.custom_job_name:
+        job_name = st.session_state.custom_job_name
+
+        st.markdown('<div class="section-card">', unsafe_allow_html=True)
+        st.markdown('<h3><span class="step-indicator">3</span> Job Status & Results</h3>', unsafe_allow_html=True)
+
+        status_data = api_request("GET", "/api/custom/status/{}".format(job_name))
+        if status_data:
+            current_status = status_data.get("status", "Unknown")
+            secondary = status_data.get("secondary_status", "")
+
+            st.markdown("**Job:** `{}`".format(job_name))
+            st.markdown("**Status:** {} {}".format(current_status, "-- {}".format(secondary) if secondary else ""))
+
+            if status_data.get("duration"):
+                st.markdown("**Duration:** {}".format(status_data["duration"]))
+
+            if status_data.get("failure_reason"):
+                st.error("Failure: {}".format(status_data["failure_reason"]))
+
+            # Auto-refresh while in progress
+            if current_status == "InProgress":
+                st.info("Training job is running. Page will refresh automatically.")
+                time.sleep(15)
+                st.rerun()
+
+            # Show artifacts when completed
+            if current_status == "Completed":
+                st.success("Training job completed successfully.")
+
+                if st.session_state.custom_artifacts is None:
+                    with st.spinner("Loading output artifacts..."):
+                        artifacts = api_request("GET", "/api/custom/artifacts/{}".format(job_name))
+                        if artifacts and "message" not in artifacts:
+                            st.session_state.custom_artifacts = artifacts
+
+                if st.session_state.custom_artifacts:
+                    arts = st.session_state.custom_artifacts
+
+                    # Show any images found
+                    img_col1, img_col2 = st.columns(2)
+                    with img_col1:
+                        if arts.get("correlation_heatmap_url"):
+                            st.markdown("**Correlation Heatmap**")
+                            st.image(arts["correlation_heatmap_url"], use_container_width=True)
+                    with img_col2:
+                        if arts.get("missing_value_matrix_url"):
+                            st.markdown("**Missing Value Matrix**")
+                            st.image(arts["missing_value_matrix_url"], use_container_width=True)
+
+                    # Show metrics if available
+                    metrics = arts.get("evaluation_metrics", {})
+                    if metrics:
+                        st.markdown("---")
+                        st.markdown("#### Output Metrics")
+                        st.json(metrics)
+
+                    # Show data summary if available
+                    summary = arts.get("data_summary", {})
+                    if summary:
+                        with st.expander("Data Summary"):
+                            st.json(summary)
+
+                    if not any([arts.get("correlation_heatmap_url"),
+                                arts.get("missing_value_matrix_url"),
+                                arts.get("evaluation_metrics"),
+                                arts.get("data_summary")]):
+                        st.info(
+                            "No standard artifacts found in output.tar.gz. "
+                            "Your model was saved to S3 successfully."
+                        )
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # -- Custom job history in sidebar is handled by the existing sidebar code --
+
+    st.markdown("---")
+    st.caption(
+        "Custom Script Mode -- Your script runs as-is on SageMaker. "
+        "The platform provides infrastructure; you provide the logic."
+    )
+    st.stop()  # Prevent built-in model UI from rendering below
 
 
 # ==================================================================

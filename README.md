@@ -18,6 +18,8 @@ User --> Streamlit UI (Fargate) --> FastAPI Backend --> SageMaker Pipeline
 
 ## How It Works
 
+### Built-in Models Mode
+
 1. User uploads a CSV dataset through the Streamlit interface.
 2. The app parses column headers and presents selection controls.
 3. User selects: target column, columns to drop, ML model, and task type (classification/regression).
@@ -25,6 +27,19 @@ User --> Streamlit UI (Fargate) --> FastAPI Backend --> SageMaker Pipeline
 5. SageMaker runs the training script with the user's exact configuration.
 6. EDA plots and model metrics are saved to S3 and displayed in the UI.
 7. The trained model is registered in the SageMaker Model Registry.
+
+### Custom Script Mode
+
+1. User switches to "Custom Script" mode via the workflow selector.
+2. User uploads a Python training script (.py), a CSV dataset, and an optional requirements.txt.
+3. User clicks "Start Training Job" to launch a standalone SageMaker training job.
+4. The script runs on an ephemeral ml.m5.large instance using the SKLearn 1.2 container (Python 3.9).
+5. Output artifacts (model, metrics, plots) are saved to S3 and displayed in the UI.
+
+Custom scripts should follow SageMaker conventions:
+- Read training data from the `--train` arg or `SM_CHANNEL_TRAIN` env var
+- Save the model to `--model_dir` or `SM_MODEL_DIR` (`/opt/ml/model`)
+- Save other outputs to `--output_dir` or `SM_OUTPUT_DATA_DIR` (`/opt/ml/output/data`)
 
 ## Supported Models
 

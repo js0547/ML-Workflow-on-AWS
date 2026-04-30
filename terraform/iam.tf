@@ -240,7 +240,7 @@ resource "aws_iam_role_policy" "ecs_task_s3" {
   })
 }
 
-# SageMaker pipeline trigger and monitoring permissions
+# SageMaker pipeline trigger, monitoring, and custom training job permissions
 resource "aws_iam_role_policy" "ecs_task_sagemaker" {
   name = "${var.project_name}-ecs-task-sagemaker"
   role = aws_iam_role.ecs_task.id
@@ -256,11 +256,23 @@ resource "aws_iam_role_policy" "ecs_task_sagemaker" {
           "sagemaker:ListPipelineExecutionSteps",
           "sagemaker:DescribePipeline",
           "sagemaker:ListPipelineExecutions",
+          "sagemaker:CreateTrainingJob",
           "sagemaker:DescribeTrainingJob",
+          "sagemaker:ListTrainingJobs",
           "sagemaker:DescribeModelPackage",
           "sagemaker:ListModelPackages"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = "iam:PassRole"
+        Resource = aws_iam_role.sagemaker_execution.arn
+        Condition = {
+          StringEquals = {
+            "iam:PassedToService" = "sagemaker.amazonaws.com"
+          }
+        }
       }
     ]
   })

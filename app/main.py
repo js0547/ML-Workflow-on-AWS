@@ -14,15 +14,20 @@ import io
 import json
 import logging
 import os
+import tempfile
 import time
 from datetime import datetime
 
 import boto3
 import pandas as pd
 from botocore.exceptions import ClientError
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+import sagemaker
+from sagemaker.estimator import Estimator as SageMakerEstimator
+from sagemaker.inputs import TrainingInput as SageMakerTrainingInput
 
 # Configure logging
 logging.basicConfig(
@@ -467,3 +472,228 @@ def _extract_artifacts_from_tar(output_prefix):
         logger.warning("Error extracting output.tar.gz: %s", e)
 
     return artifacts
+
+
+# ------------------------------------------------------------------
+# Custom Script Endpoints
+# ------------------------------------------------------------------
+
+SKLEARN_FRAMEWORK_VERSION = "1.2-1"
+CUSTOM_TRAINING_INSTANCE = "ml.m5.large"
+
+
+@app.post("/api/custom/upload")
+async def upload_custom_files(
+    script: UploadFile = File(...),
+    dataset: UploadFile = File(...),
+    requirements: UploadFile = File(None),
+):
+    """
+    Upload a custom Python training script, dataset CSV, and optional
+    requirements.txt to S3. Returns S3 keys for use in /api/custom/trigger.
+    """
+    if not script.filename.endswith(".py"):
+        raise HTTPException(status_code=400, detail="Script must be a .py file.")
+    if not dataset.filename.endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Dataset must be a .csv file.")
+
+    try:
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+        # Upload script
+        script_content = await script.read()
+        script_key = "custom/scripts/{}_{}".format(timestamp, script.filename)
+        s3_client.put_object(Bucket=S3_BUCKET, Key=script_key, Body=script_content)
+
+        # Upload dataset
+        dataset_content = await dataset.read()
+        dataset_key = "custom/data/{}_{}".format(timestamp, dataset.filename)
+        s3_client.put_object(Bucket=S3_BUCKET, Key=dataset_key, Body=dataset_content, ContentType="text/csv")
+
+        # Upload optional requirements
+        req_key = ""
+        if requirements and requirements.filename:
+            req_content = await requirements.read()
+            req_key = "custom/scripts/{}_requirements.txt".format(timestamp)
+            s3_client.put_object(Bucket=S3_BUCKET, Key=req_key, Body=req_content)
+
+        row_count = 0
+        col_count = 0
+        try:
+            df = pd.read_csv(io.BytesIO(dataset_content))
+            row_count = len(df)
+            col_count = len(df.columns)
+        except Exception:
+            pass
+
+        logger.info("Custom upload: script=%s, dataset=%s (%d rows)",
+                     script.filename, dataset.filename, row_count)
+
+        return {
+            "script_s3_key": script_key,
+            "script_filename": script.filename,
+            "requirements_s3_key": req_key,
+            "dataset_s3_uri": "s3://{}/{}".format(S3_BUCKET, dataset_key),
+            "dataset_filename": dataset.filename,
+            "row_count": row_count,
+            "column_count": col_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Custom upload failed: %s", str(e))
+        raise HTTPException(status_code=500, detail="Upload failed: {}".format(str(e)))
+
+
+@app.post("/api/custom/trigger")
+def trigger_custom_job(
+    script_s3_key: str = Form(...),
+    script_filename: str = Form(...),
+    dataset_s3_uri: str = Form(...),
+    requirements_s3_key: str = Form(""),
+):
+    """
+    Start a SageMaker training job using the user's custom script.
+    Downloads the script to a temp directory and uses the SageMaker SDK
+    to submit a training job on an ephemeral ml.m5.large instance.
+    """
+    tmpdir = None
+    try:
+        # Stage script files locally so the SageMaker SDK can package them
+        tmpdir = tempfile.mkdtemp(prefix="custom_script_")
+
+        script_path = os.path.join(tmpdir, script_filename)
+        s3_client.download_file(S3_BUCKET, script_s3_key, script_path)
+
+        if requirements_s3_key:
+            req_path = os.path.join(tmpdir, "requirements.txt")
+            s3_client.download_file(S3_BUCKET, requirements_s3_key, req_path)
+
+        logger.info("Custom job: script=%s, data=%s", script_filename, dataset_s3_uri)
+
+        image_uri = sagemaker.image_uris.retrieve(
+            framework="sklearn",
+            region=AWS_REGION,
+            version=SKLEARN_FRAMEWORK_VERSION,
+            py_version="py3",
+            instance_type=CUSTOM_TRAINING_INSTANCE,
+        )
+
+        sm_session = sagemaker.Session(
+            boto_session=boto3.Session(region_name=AWS_REGION),
+        )
+
+        estimator = SageMakerEstimator(
+            image_uri=image_uri,
+            role=SAGEMAKER_ROLE_ARN,
+            instance_count=1,
+            instance_type=CUSTOM_TRAINING_INSTANCE,
+            entry_point=script_filename,
+            source_dir=tmpdir,
+            output_path="s3://{}/custom-output".format(S3_BUCKET),
+            base_job_name="custom-script",
+            max_run=7200,
+            sagemaker_session=sm_session,
+        )
+
+        training_input = SageMakerTrainingInput(
+            s3_data=dataset_s3_uri,
+            content_type="text/csv",
+        )
+
+        estimator.fit({"train": training_input}, wait=False)
+        job_name = estimator.latest_training_job.name
+
+        logger.info("Custom training job started: %s", job_name)
+        return {
+            "job_name": job_name,
+            "status": "InProgress",
+            "message": "Custom training job started: {}".format(job_name),
+        }
+
+    except ClientError as e:
+        error_msg = e.response["Error"]["Message"]
+        logger.error("Custom job trigger failed: %s", error_msg)
+        raise HTTPException(status_code=500, detail="Trigger failed: {}".format(error_msg))
+    except Exception as e:
+        logger.error("Custom job trigger failed: %s", str(e))
+        raise HTTPException(status_code=500, detail="Trigger failed: {}".format(str(e)))
+    finally:
+        # Clean up temp directory (SDK has already uploaded source to S3)
+        if tmpdir and os.path.exists(tmpdir):
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+@app.get("/api/custom/status/{job_name}")
+def get_custom_job_status(job_name: str):
+    """Get the status of a custom training job."""
+    try:
+        resp = sagemaker_client.describe_training_job(TrainingJobName=job_name)
+        status = resp.get("TrainingJobStatus", "Unknown")
+        secondary = resp.get("SecondaryStatus", "")
+        failure = resp.get("FailureReason", "")
+        start_time = str(resp.get("TrainingStartTime", ""))
+        end_time = str(resp.get("TrainingEndTime", ""))
+        duration = ""
+        if resp.get("TrainingStartTime") and resp.get("TrainingEndTime"):
+            delta = resp["TrainingEndTime"] - resp["TrainingStartTime"]
+            duration = str(int(delta.total_seconds())) + "s"
+
+        return {
+            "job_name": job_name,
+            "status": status,
+            "secondary_status": secondary,
+            "failure_reason": failure,
+            "start_time": start_time,
+            "end_time": end_time,
+            "duration": duration,
+        }
+    except ClientError as e:
+        raise HTTPException(status_code=404, detail="Job not found: {}".format(
+            e.response["Error"]["Message"]))
+
+
+@app.get("/api/custom/artifacts/{job_name}")
+def get_custom_job_artifacts(job_name: str):
+    """Retrieve output artifacts from a completed custom training job."""
+    try:
+        resp = sagemaker_client.describe_training_job(TrainingJobName=job_name)
+        if resp.get("TrainingJobStatus") != "Completed":
+            return {
+                "status": resp.get("TrainingJobStatus"),
+                "message": "Job has not completed yet.",
+            }
+
+        output_path = resp.get("OutputDataConfig", {}).get("S3OutputPath", "")
+        output_prefix = "{}/{}/output/".format(
+            output_path.replace("s3://{}/".format(S3_BUCKET), ""),
+            job_name,
+        )
+        return _extract_artifacts_from_tar(output_prefix)
+
+    except ClientError as e:
+        raise HTTPException(status_code=500, detail="Artifact retrieval failed: {}".format(
+            e.response["Error"]["Message"]))
+
+
+@app.get("/api/custom/jobs")
+def list_custom_jobs():
+    """List recent custom training jobs."""
+    try:
+        resp = sagemaker_client.list_training_jobs(
+            NameContains="custom-script",
+            SortBy="CreationTime",
+            SortOrder="Descending",
+            MaxResults=20,
+        )
+        jobs = []
+        for job in resp.get("TrainingJobSummaries", []):
+            jobs.append({
+                "job_name": job.get("TrainingJobName", ""),
+                "status": job.get("TrainingJobStatus", ""),
+                "start_time": str(job.get("CreationTime", "")),
+            })
+        return {"jobs": jobs}
+    except ClientError:
+        return {"jobs": []}
