@@ -231,9 +231,9 @@ Required GitHub Secrets:
 
 ## Design Principles
 
-- No Auto-ML: The user selects the exact model and parameters
+- The user selects the exact model and parameters
 - User explicitly chooses classification or regression task type
-- AWS-native S3 versioning replaces DVC
+- AWS-native S3 versioning 
 - Serverless Fargate hosting with scale-to-zero capability
 - Ephemeral SageMaker compute protects the budget
 - Least-privilege IAM roles for all components
