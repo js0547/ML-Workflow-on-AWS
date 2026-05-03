@@ -86,14 +86,14 @@ All infrastructure is provisioned with Terraform in the `eu-north-1` (Stockholm)
 
 | Resource | Purpose | Cost |
 |----------|---------|------|
-| S3 Bucket | Data and artifact storage with versioning | Free-tier |
-| ECR Repository | Docker image storage | Free-tier (500 MB) |
-| ECS Fargate | Serverless container hosting | Pay-per-second (~$0.01/hr) |
-| SageMaker ml.m5.large | Ephemeral training instances | ~$0.15-0.30/run |
-| Model Package Group | Model versioning and registry | Free |
-| CloudWatch | Logging, alarms, monitoring dashboard | Free-tier (5 GB logs, 10 alarms) |
+| S3 Bucket | Data and artifact storage with versioning | 
+| ECR Repository | Docker image storage | 
+| ECS Fargate | Serverless container hosting | 
+| SageMaker ml.m5.large | Ephemeral training instances | 
+| Model Package Group | Model versioning and registry | 
+| CloudWatch | Logging, alarms, monitoring dashboard | 
 
-For a demo session of a few hours, the total cost is under $1 for Fargate plus the SageMaker training costs.
+]
 
 ### Scaling to Zero
 
