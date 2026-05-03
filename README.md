@@ -1,4 +1,4 @@
-# User-Controlled Tabular ML Platform on AWS
+# ML Platform on AWS
 
 A platform where the human user makes all key modeling decisions. The system provides infrastructure and executes the user's specific configuration via Amazon SageMaker. No Auto-ML -- the user's choice is final.
 
